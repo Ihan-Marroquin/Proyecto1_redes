@@ -1,0 +1,76 @@
+{
+  "machines": [
+    {
+      "machine_id": "SELL-01",
+      "name": "Beverage cup sealer",
+      "area": "Packaging line 1",
+      "status": "warning",
+      "temperature_c": 184.5,
+      "cycles": 18427,
+      "last_maintenance": "2026-08-02",
+      "next_maintenance": "2026-08-25",
+      "notes": "Inspect sealing resistance before the next production shift."
+    },
+    {
+      "machine_id": "PUMP-02",
+      "name": "Sanitary transfer pump",
+      "area": "Mixing area",
+      "status": "operational",
+      "temperature_c": 42.1,
+      "hours": 730,
+      "last_maintenance": "2026-07-28",
+      "next_maintenance": "2026-09-28",
+      "notes": "No active alerts."
+    },
+    {
+      "machine_id": "COMP-01",
+      "name": "Pneumatic line compressor",
+      "area": "Utilities room",
+      "status": "maintenance",
+      "temperature_c": 51.8,
+      "hours": 1520,
+      "last_maintenance": "2026-08-18",
+      "next_maintenance": "2026-10-18",
+      "notes": "Oil filter replacement in progress."
+    }
+  ],
+  "spare_parts": [
+    {
+      "part_number": "RES-220V-400W",
+      "name": "Sealing resistance 220 V / 400 W",
+      "quantity": 2,
+      "minimum_stock": 1,
+      "location": "Shelf A-03",
+      "compatible_machines": ["SELL-01"]
+    },
+    {
+      "part_number": "GASKET-P02",
+      "name": "Food-grade pump gasket",
+      "quantity": 5,
+      "minimum_stock": 3,
+      "location": "Shelf B-07",
+      "compatible_machines": ["PUMP-02"]
+    },
+    {
+      "part_number": "FILTER-C01",
+      "name": "Compressor oil filter",
+      "quantity": 0,
+      "minimum_stock": 2,
+      "location": "Shelf C-02",
+      "compatible_machines": ["COMP-01"]
+    }
+  ],
+  "work_orders": [
+    {
+      "work_order_id": "WO-0001",
+      "machine_id": "COMP-01",
+      "issue": "Replace oil filter and inspect lubrication circuit.",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-08-18T14:00:00+00:00",
+      "resolution": null,
+      "closed_at": null
+    }
+  ]
+}
+
