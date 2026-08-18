@@ -1,0 +1,50 @@
+{
+  "protocol_version": "2025-11-25",
+  "servers": [
+    {
+      "name": "maintenance",
+      "enabled": true,
+      "command_default": "python3",
+      "command_windows": "python",
+      "args": ["-m", "src.maintenance_server"],
+      "cwd": "${PROJECT_ROOT}",
+      "env": {
+        "MAINTENANCE_DATA_PATH": "${PROJECT_ROOT}/data/maintenance.json"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "filesystem",
+      "enabled": true,
+      "command_default": "npx",
+      "args_default": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${DEMO_WORKSPACE}"
+      ],
+      "command_windows": "cmd",
+      "args_windows": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${DEMO_WORKSPACE}"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "timeout": 60
+    },
+    {
+      "name": "git",
+      "enabled": true,
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "${DEMO_WORKSPACE}"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "timeout": 60
+    }
+  ]
+}
+
