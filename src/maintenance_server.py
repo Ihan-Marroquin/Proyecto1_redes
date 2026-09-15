@@ -1,8 +1,8 @@
-"""Industrial maintenance MCP server implemented manually with JSON-RPC 2.0.
+"""Transport-independent industrial maintenance MCP protocol implementation.
 
-Transport: stdio, one UTF-8 JSON object per line.
-MCP protocol version: 2025-11-25.
-No MCP SDK or framework is used.
+The same JSON-RPC handler is used by the local stdio entry point in this module
+and by the Streamable HTTP entry point in :mod:`src.http_server`.  No MCP SDK or
+framework is used.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -241,20 +242,23 @@ class MaintenanceService:
 
     def __init__(self, data_path: Path) -> None:
         self.data_path = data_path
+        self._lock = threading.RLock()
         self.data_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.data_path.exists():
             self._save(copy.deepcopy(DEFAULT_DATA))
 
     def _load(self) -> dict[str, Any]:
-        return json.loads(self.data_path.read_text(encoding="utf-8"))
+        with self._lock:
+            return json.loads(self.data_path.read_text(encoding="utf-8"))
 
     def _save(self, data: dict[str, Any]) -> None:
-        temporary = self.data_path.with_suffix(self.data_path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, self.data_path)
+        with self._lock:
+            temporary = self.data_path.with_suffix(self.data_path.suffix + ".tmp")
+            temporary.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, self.data_path)
 
     @staticmethod
     def _required_string(arguments: dict[str, Any], name: str, minimum: int = 1) -> str:
@@ -328,47 +332,49 @@ class MaintenanceService:
         if priority not in {"low", "medium", "high", "critical"}:
             raise ToolInputError("Invalid priority")
 
-        data = self._load()
-        known_ids = {machine["machine_id"].upper() for machine in data["machines"]}
-        if machine_id not in known_ids:
-            raise ToolInputError(f"Machine not found: {machine_id}")
+        with self._lock:
+            data = self._load()
+            known_ids = {machine["machine_id"].upper() for machine in data["machines"]}
+            if machine_id not in known_ids:
+                raise ToolInputError(f"Machine not found: {machine_id}")
 
-        numeric_ids = []
-        for order in data["work_orders"]:
-            try:
-                numeric_ids.append(int(order["work_order_id"].split("-")[-1]))
-            except (KeyError, TypeError, ValueError):
-                continue
-        order_id = f"WO-{max(numeric_ids, default=0) + 1:04d}"
-        order = {
-            "work_order_id": order_id,
-            "machine_id": machine_id,
-            "issue": issue,
-            "priority": priority,
-            "status": "open",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "resolution": None,
-            "closed_at": None,
-        }
-        data["work_orders"].append(order)
-        self._save(data)
+            numeric_ids = []
+            for existing_order in data["work_orders"]:
+                try:
+                    numeric_ids.append(int(existing_order["work_order_id"].split("-")[-1]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            order_id = f"WO-{max(numeric_ids, default=0) + 1:04d}"
+            order = {
+                "work_order_id": order_id,
+                "machine_id": machine_id,
+                "issue": issue,
+                "priority": priority,
+                "status": "open",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "resolution": None,
+                "closed_at": None,
+            }
+            data["work_orders"].append(order)
+            self._save(data)
         return {"created": True, "work_order": order}
 
     def close_work_order(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._reject_extra(arguments, {"work_order_id", "resolution"})
         work_order_id = self._required_string(arguments, "work_order_id").upper()
         resolution = self._required_string(arguments, "resolution", 5)
-        data = self._load()
-        for order in data["work_orders"]:
-            if order["work_order_id"].upper() != work_order_id:
-                continue
-            if order["status"] == "closed":
-                raise ToolInputError(f"Work order is already closed: {work_order_id}")
-            order["status"] = "closed"
-            order["resolution"] = resolution
-            order["closed_at"] = datetime.now(timezone.utc).isoformat()
-            self._save(data)
-            return {"closed": True, "work_order": order}
+        with self._lock:
+            data = self._load()
+            for order in data["work_orders"]:
+                if order["work_order_id"].upper() != work_order_id:
+                    continue
+                if order["status"] == "closed":
+                    raise ToolInputError(f"Work order is already closed: {work_order_id}")
+                order["status"] = "closed"
+                order["resolution"] = resolution
+                order["closed_at"] = datetime.now(timezone.utc).isoformat()
+                self._save(data)
+                return {"closed": True, "work_order": order}
         raise ToolInputError(f"Work order not found: {work_order_id}")
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -440,8 +446,8 @@ class MCPServer:
                     "serverInfo": {
                         "name": "industrial-maintenance-server",
                         "title": "Industrial Maintenance MCP Server",
-                        "version": "1.0.0",
-                        "description": "Local tools for machinery, spare parts, and work orders.",
+                        "version": "2.0.0",
+                        "description": "Tools for machinery, spare parts, and work orders.",
                     },
                     "instructions": (
                         "Inspect data with read-only tools first. Creating or closing a work order "
@@ -486,11 +492,21 @@ class MCPServer:
         return None if is_notification else _error(request_id, -32601, "Method not found")
 
 
-def main() -> None:
-    data_path = Path(
+def configured_data_path() -> Path:
+    """Return the persistent data path shared by both server transports."""
+    return Path(
         os.getenv("MAINTENANCE_DATA_PATH", str(PROJECT_ROOT / "data" / "maintenance.json"))
     )
-    server = MCPServer(MaintenanceService(data_path))
+
+
+def build_server(data_path: Path | None = None) -> MCPServer:
+    """Build one stateful MCP protocol session over the shared service data."""
+    return MCPServer(MaintenanceService(data_path or configured_data_path()))
+
+
+def serve_stdio() -> None:
+    """Run the local newline-delimited stdio transport."""
+    server = build_server()
     print("Industrial Maintenance MCP Server running on stdio", file=sys.stderr, flush=True)
 
     for raw_line in sys.stdin:
@@ -508,6 +524,10 @@ def main() -> None:
                 json.dumps(response, ensure_ascii=False, separators=(",", ":")),
                 flush=True,
             )
+
+
+def main() -> None:
+    serve_stdio()
 
 
 if __name__ == "__main__":
