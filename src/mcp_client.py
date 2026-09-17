@@ -8,6 +8,8 @@ import queue
 import re
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +21,8 @@ class MCPError(RuntimeError):
 
 
 class StdioMCPClient:
+    transport = "stdio"
+
     def __init__(
         self,
         name: str,
@@ -239,6 +243,239 @@ class StdioMCPClient:
                 if thread is not None and thread.is_alive():
                     thread.join(timeout=1)
             self.process = None
+
+
+class HttpMCPClient:
+    """Manual MCP client for the JSON and SSE forms of Streamable HTTP."""
+
+    transport = "http"
+
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        logger: MCPInteractionLogger,
+        protocol_version: str = "2025-11-25",
+        headers: dict[str, str] | None = None,
+        timeout: float = 45,
+    ) -> None:
+        self.name = name
+        self.url = url
+        self.logger = logger
+        self.protocol_version = protocol_version
+        self.headers = dict(headers or {})
+        self.timeout = timeout
+        self.session_id: str | None = None
+        self._next_id = 1
+        self.server_info: dict[str, Any] = {}
+        self.capabilities: dict[str, Any] = {}
+
+    def _request_headers(self, has_body: bool = True) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "cc3067-manual-mcp-chatbot/2.0.0",
+            **self.headers,
+        }
+        if has_body:
+            headers["Content-Type"] = "application/json"
+        if self.session_id:
+            headers["MCP-Session-Id"] = self.session_id
+            headers["MCP-Protocol-Version"] = self.protocol_version
+        return headers
+
+    @staticmethod
+    def _parse_sse(body: str, expected_id: Any) -> dict[str, Any] | None:
+        for event in body.replace("\r\n", "\n").split("\n\n"):
+            data_lines = [
+                line[5:].lstrip()
+                for line in event.splitlines()
+                if line.startswith("data:")
+            ]
+            if not data_lines:
+                continue
+            try:
+                message = json.loads("\n".join(data_lines))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(message, dict) and message.get("id") == expected_id:
+                return message
+        return None
+
+    def _send(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        self.logger.record(self.name, "client_to_server", message)
+        request = urllib.request.Request(
+            self.url,
+            data=encoded,
+            headers=self._request_headers(),
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                status = response.status
+                content_type = response.headers.get_content_type()
+                body = response.read().decode("utf-8")
+                returned_session = response.headers.get("MCP-Session-Id")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                detail = json.loads(body).get("error", {}).get("message", body)
+            except json.JSONDecodeError:
+                detail = body or exc.reason
+            raise MCPError(f"{self.name} returned HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise MCPError(f"Could not connect to MCP server {self.name}: {exc.reason}") from exc
+
+        if returned_session:
+            self.session_id = returned_session
+        if status == 202:
+            return None
+        try:
+            if content_type == "application/json":
+                response_message = json.loads(body)
+            elif content_type == "text/event-stream":
+                response_message = self._parse_sse(body, message.get("id"))
+                if response_message is None:
+                    raise MCPError(f"SSE response from {self.name} did not contain the result")
+            else:
+                raise MCPError(
+                    f"Unexpected content type from {self.name}: {content_type or 'missing'}"
+                )
+        except json.JSONDecodeError as exc:
+            raise MCPError(f"MCP server {self.name} returned invalid JSON") from exc
+        if not isinstance(response_message, dict):
+            raise MCPError(f"MCP server {self.name} returned an invalid response")
+        self.logger.record(self.name, "server_to_client", response_message)
+        return response_message
+
+    def start(self) -> dict[str, Any]:
+        if self.server_info:
+            return {
+                "protocolVersion": self.protocol_version,
+                "serverInfo": self.server_info,
+                "capabilities": self.capabilities,
+            }
+        result = self.request(
+            "initialize",
+            {
+                "protocolVersion": self.protocol_version,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "cc3067-manual-mcp-chatbot",
+                    "title": "CC3067 Manual MCP Chatbot",
+                    "version": "2.0.0",
+                },
+            },
+        )
+        if not self.session_id:
+            raise MCPError(f"MCP server {self.name} did not return MCP-Session-Id")
+        negotiated = result.get("protocolVersion")
+        if negotiated != self.protocol_version:
+            self.close()
+            raise MCPError(
+                f"{self.name} negotiated {negotiated!r}; expected {self.protocol_version!r}"
+            )
+        self.server_info = result.get("serverInfo", {})
+        self.capabilities = result.get("capabilities", {})
+        self.notify("notifications/initialized")
+        return result
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        del timeout  # HTTP requests use the client-level timeout.
+        request_id = self._next_id
+        self._next_id += 1
+        message: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+        }
+        if params is not None:
+            message["params"] = params
+        response = self._send(message)
+        if response is None:
+            raise MCPError(f"MCP server {self.name} returned no response for {method}")
+        if "error" in response:
+            error = response["error"]
+            raise MCPError(
+                f"{self.name} returned {error.get('code')}: {error.get('message')}"
+            )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise MCPError(f"Invalid result for {method} from {self.name}")
+        return result
+
+    def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        self._send(message)
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params = {"cursor": cursor} if cursor else {}
+            result = self.request("tools/list", params)
+            page = result.get("tools", [])
+            if not isinstance(page, list):
+                raise MCPError(f"Invalid tools/list response from {self.name}")
+            tools.extend(page)
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return tools
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.request("tools/call", {"name": name, "arguments": arguments})
+
+    def close(self) -> None:
+        if not self.session_id:
+            return
+        request = urllib.request.Request(
+            self.url,
+            headers=self._request_headers(has_body=False),
+            method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout):
+                pass
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            pass
+        finally:
+            self.session_id = None
+
+
+def client_from_config(
+    entry: dict[str, Any],
+    logger: MCPInteractionLogger,
+    protocol_version: str,
+) -> StdioMCPClient | HttpMCPClient:
+    """Create the correct manual client for one normalized config entry."""
+    if entry.get("transport") == "http":
+        return HttpMCPClient(
+            name=entry["name"],
+            url=entry["url"],
+            headers=entry.get("headers", {}),
+            logger=logger,
+            protocol_version=protocol_version,
+            timeout=entry["timeout"],
+        )
+    return StdioMCPClient(
+        name=entry["name"],
+        command=entry["command"],
+        args=entry["args"],
+        cwd=entry["cwd"],
+        env=entry["env"],
+        logger=logger,
+        protocol_version=protocol_version,
+        timeout=entry["timeout"],
+    )
 
 
 @dataclass(frozen=True)

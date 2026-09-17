@@ -1,0 +1,13 @@
+{
+  "protocol_version": "2025-11-25",
+  "servers": [
+    {
+      "name": "maintenance-remote",
+      "transport": "http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "url_env": "MCP_REMOTE_URL",
+      "token_env": "MCP_AUTH_TOKEN",
+      "timeout": 30
+    }
+  ]
+}

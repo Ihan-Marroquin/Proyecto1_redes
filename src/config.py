@@ -62,6 +62,31 @@ def load_server_config(path: Path | None = None) -> dict[str, Any]:
     for entry in raw.get("servers", []):
         if not entry.get("enabled", True):
             continue
+        transport = str(entry.get("transport", "stdio")).lower()
+        if transport == "http":
+            url = os.getenv(str(entry.get("url_env", ""))) if entry.get("url_env") else None
+            url = url or entry.get("url")
+            if not isinstance(url, str) or not url:
+                raise ValueError(f"HTTP MCP server {entry['name']!r} requires a URL")
+            headers = {
+                key: _expand(str(value))
+                for key, value in entry.get("headers", {}).items()
+            }
+            token_env = entry.get("token_env")
+            if token_env and os.getenv(str(token_env)):
+                headers["Authorization"] = f"Bearer {os.environ[str(token_env)]}"
+            normalized.append(
+                {
+                    "name": entry["name"],
+                    "transport": "http",
+                    "url": _expand(url),
+                    "headers": headers,
+                    "timeout": float(entry.get("timeout", 45)),
+                }
+            )
+            continue
+        if transport != "stdio":
+            raise ValueError(f"Unsupported MCP transport for {entry['name']!r}: {transport}")
         command = _platform_value(entry, "command")
         args = _platform_value(entry, "args", [])
         cwd = entry.get("cwd", "${PROJECT_ROOT}")
@@ -69,6 +94,7 @@ def load_server_config(path: Path | None = None) -> dict[str, Any]:
         normalized.append(
             {
                 "name": entry["name"],
+                "transport": "stdio",
                 "command": _expand(command),
                 "args": [_expand(str(arg)) for arg in args],
                 "cwd": _expand(cwd),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.config import PROJECT_ROOT, load_server_config, prepare_demo_workspace
-from src.mcp_client import StdioMCPClient
+from src.mcp_client import client_from_config
 from src.mcp_logging import MCPInteractionLogger
 
 
@@ -14,22 +14,14 @@ def main() -> int:
     failures = 0
 
     for entry in config["servers"]:
-        client = StdioMCPClient(
-            name=entry["name"],
-            command=entry["command"],
-            args=entry["args"],
-            cwd=entry["cwd"],
-            env=entry["env"],
-            logger=logger,
-            protocol_version=config["protocol_version"],
-            timeout=entry["timeout"],
-        )
+        client = client_from_config(entry, logger, config["protocol_version"])
         try:
             result = client.start()
             tools = client.list_tools()
             tool_names = ", ".join(tool["name"] for tool in tools)
             print(
-                f"PASS {entry['name']}: MCP {result['protocolVersion']}, "
+                f"PASS {entry['name']} [{client.transport}]: "
+                f"MCP {result['protocolVersion']}, "
                 f"{len(tools)} tools"
             )
             print(f"     {tool_names}")

@@ -1,4 +1,4 @@
-"""Console host that connects Claude to local MCP servers."""
+"""Console host that connects Claude to local and remote MCP servers."""
 
 from __future__ import annotations
 
@@ -11,11 +11,18 @@ from typing import Any
 
 from .anthropic_client import AnthropicAPIError, AnthropicClient
 from .config import PROJECT_ROOT, load_env_file, load_server_config, prepare_demo_workspace
-from .mcp_client import MCPError, RegisteredTool, StdioMCPClient, ToolRegistry
+from .mcp_client import (
+    HttpMCPClient,
+    MCPError,
+    RegisteredTool,
+    StdioMCPClient,
+    ToolRegistry,
+    client_from_config,
+)
 from .mcp_logging import MCPInteractionLogger
 
 
-SYSTEM_PROMPT = """You are a console assistant connected to local MCP tools.
+SYSTEM_PROMPT = """You are a console assistant connected to MCP tools.
 Answer in the same language used by the user. Keep answers clear and concise.
 Use tools when the request depends on files, Git repositories, plant machinery,
 spare parts, or maintenance work orders. Inspect before modifying whenever possible.
@@ -50,7 +57,7 @@ class ConsoleChatbot:
         self.llm = llm
         self.logger = logger
         self.protocol_version = protocol_version
-        self.clients: dict[str, StdioMCPClient] = {}
+        self.clients: dict[str, StdioMCPClient | HttpMCPClient] = {}
         self.failed_servers: dict[str, str] = {}
         self.registry = ToolRegistry()
         self.messages: list[dict[str, Any]] = []
@@ -58,16 +65,7 @@ class ConsoleChatbot:
     def connect_servers(self, server_entries: list[dict[str, Any]]) -> None:
         for entry in server_entries:
             name = entry["name"]
-            client = StdioMCPClient(
-                name=name,
-                command=entry["command"],
-                args=entry["args"],
-                cwd=entry["cwd"],
-                env=entry["env"],
-                logger=self.logger,
-                protocol_version=self.protocol_version,
-                timeout=entry["timeout"],
-            )
+            client = client_from_config(entry, self.logger, self.protocol_version)
             try:
                 client.start()
                 tools = client.list_tools()
@@ -79,7 +77,7 @@ class ConsoleChatbot:
             self.clients[name] = client
             self.registry.add_server_tools(name, tools)
             title = client.server_info.get("title") or client.server_info.get("name") or name
-            print(f"[connected] {name}: {title} ({len(tools)} tools)")
+            print(f"[connected] {name} [{client.transport}]: {title} ({len(tools)} tools)")
 
     @staticmethod
     def _tool_requires_confirmation(tool: RegisteredTool) -> bool:
@@ -175,7 +173,10 @@ class ConsoleChatbot:
     def show_servers(self) -> None:
         for name, client in self.clients.items():
             version = client.server_info.get("version", "unknown")
-            print(f"- {name}: connected (server version {version})")
+            print(
+                f"- {name}: connected via {client.transport} "
+                f"(server version {version})"
+            )
         for name, reason in self.failed_servers.items():
             print(f"- {name}: unavailable ({reason})")
 
@@ -240,7 +241,7 @@ def main() -> int:
     )
     chatbot = ConsoleChatbot(llm, logger, config["protocol_version"])
 
-    print("Starting local MCP servers...")
+    print("Starting MCP connections...")
     chatbot.connect_servers(config["servers"])
     if not chatbot.clients:
         print("No MCP server could be started. Check /servers and the JSONL log.")
