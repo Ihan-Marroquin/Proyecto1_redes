@@ -208,9 +208,9 @@ requires Python and a running endpoint.
 setup, display filters, deterministic message sequence, JSON-RPC classification, and
 analysis of the link, network, transport, and application layers.
 
-Use a local loopback capture to inspect unencrypted JSON-RPC and a separate Cloud Run
-capture to demonstrate DNS, TCP, and TLS. Never publish a production token in a packet
-capture.
+Use a local loopback capture to inspect unencrypted JSON-RPC and a separate Cloudflare
+Workers capture to demonstrate DNS, TCP, and TLS. Never publish a production token in
+a packet capture.
 
 ## Reports
 

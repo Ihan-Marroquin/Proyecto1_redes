@@ -9,8 +9,8 @@ aplicación.
 
 Para que Wireshark pueda mostrar el cuerpo JSON-RPC sin descifrar TLS, la evidencia
 principal se toma contra el mismo servidor Streamable HTTP ejecutado localmente. La
-prueba remota en Cloud Run se captura por separado para demostrar que existe tráfico
-real hacia la nube; en esa captura HTTPS protege el contenido de aplicación.
+prueba remota en Cloudflare Workers se captura por separado para demostrar que existe
+tráfico real hacia la nube; en esa captura HTTPS protege el contenido de aplicación.
 
 ### Terminal 1: servidor
 
@@ -19,8 +19,8 @@ real hacia la nube; en esa captura HTTPS protege el contenido de aplicación.
 ```
 
 El servidor queda en `http://127.0.0.1:8000/mcp` con el token de demostración
-`local-demo-token`. El código, los mensajes MCP y el transporte HTTP son los mismos que
-se empaquetan en el contenedor remoto.
+`local-demo-token`. La secuencia de mensajes MCP y el transporte HTTP reproducen el
+comportamiento del Worker remoto.
 
 ### Wireshark
 
@@ -46,7 +46,7 @@ llamada a `list_machines`. Al finalizar, detener y guardar la captura como
 `docs/evidence/mcp_streamable_http.pcapng`.
 
 > Seguridad: el token local es deliberadamente desechable. No se debe capturar ni
-> publicar el token de Cloud Run. Para una captura que se vaya a subir al repositorio,
+> publicar el token de Cloudflare. Para una captura que se vaya a subir al repositorio,
 > usar únicamente `local-demo-token`.
 
 ## Filtros de visualización
@@ -91,7 +91,7 @@ transporte aceptó la notificación.
 
 En la captura loopback, Wireshark puede mostrar un encabezado de la interfaz de captura
 en lugar de una trama Ethernet física. No hay un salto por el switch ni resolución ARP
-porque ambos procesos están en la misma computadora. En una captura contra Cloud Run,
+porque ambos procesos están en la misma computadora. En una captura contra Cloudflare,
 la dirección MAC de destino observada corresponde al siguiente salto de la red local
 (normalmente el gateway), no al servidor remoto. Las direcciones MAC solo tienen
 validez dentro del enlace local.
@@ -103,8 +103,8 @@ trama y, cuando exista Ethernet II, MAC origen, MAC destino y EtherType IPv4/IPv
 
 La prueba local utiliza las direcciones loopback del cliente y servidor. IP permite
 identificar los extremos lógicos y transportar los segmentos TCP. En la prueba de nube,
-la IP destino es la dirección resuelta para el dominio de Cloud Run; los routers cambian
-el encabezado de enlace en cada salto, pero conservan las direcciones IP extremo a
+la IP destino es la dirección resuelta para el dominio `workers.dev`; los routers
+cambian el encabezado de enlace en cada salto, pero conservan las direcciones IP extremo a
 extremo salvo traducciones NAT. También se observan TTL/Hop Limit, longitud total y el
 campo de protocolo que identifica TCP.
 
@@ -141,14 +141,16 @@ o `error`. MCP define el significado de métodos como `initialize`, `tools/list`
 flujo SSE para una solicitud, y exige HTTP 202 para notificaciones aceptadas:
 <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>.
 
-## Captura contra Cloud Run
+## Captura contra Cloudflare Workers
 
 Para evidenciar el servidor realmente remoto, iniciar otra captura sobre el adaptador de
-red activo y ejecutar `python -m scripts.verify_remote` con la URL de Cloud Run. Usar el
-filtro de visualización `tls || tcp.port == 443`. En esta captura se pueden explicar DNS,
-la conexión TCP, el handshake TLS y los registros cifrados. El contenido JSON-RPC no
-será visible sin secretos de sesión TLS; esto es el comportamiento de seguridad
-esperado. Las capturas del contenido MCP deben provenir de la prueba local controlada.
+red activo y ejecutar `python -m scripts.verify_remote` con la URL del Worker. Usar el
+filtro de visualización `dns || tls || tcp.port == 443`. En esta captura se pueden
+explicar DNS, la conexión TCP, el handshake TLS y los registros cifrados. El contenido
+JSON-RPC no será visible sin secretos de sesión TLS; esto es el comportamiento de
+seguridad esperado. Las capturas del contenido MCP deben provenir de la prueba local
+controlada. Guardar esta segunda captura como
+`docs/evidence/mcp_cloudflare_tls.pcapng`.
 
 ## Lista de evidencia para el reporte
 
@@ -158,5 +160,5 @@ esperado. Las capturas del contenido MCP deben provenir de la prueba local contr
 - Captura de `tools/list` y su respuesta.
 - Captura de `tools/call` y el resultado de `list_machines`.
 - Captura de los detalles de enlace, IP y TCP de una trama representativa.
-- Captura remota con DNS/TCP/TLS hacia Cloud Run, sin publicar el token.
+- Captura remota con DNS/TCP/TLS hacia Cloudflare Workers, sin publicar el token.
 - Archivo `.pcapng` sanitizado dentro de `docs/evidence/`.
