@@ -19,6 +19,7 @@ confirmation in the chatbot.
 - Bearer authentication, Origin validation, sessions, and protocol-version checks for
   the remote server.
 - Docker and Google Cloud Run deployment files.
+- A Cloudflare Workers deployment target that uses a SQLite-backed Durable Object.
 - Automated tests that do not consume Anthropic API credits.
 - A reproducible Wireshark procedure for application and network-layer analysis.
 
@@ -152,6 +153,17 @@ Shell, configure the token, retrieve the URL, and verify the live endpoint.
 The demonstration stores work orders in the container's ephemeral filesystem. A
 production version should use a transactional database before enabling multiple
 instances.
+
+## Deploy to Cloudflare Workers
+
+The `cloudflare/` directory contains an alternative remote deployment that works on
+the Workers Free plan. It preserves the same manual MCP lifecycle, Bearer token,
+Streamable HTTP endpoint, six maintenance tools, sessions, and mutable work orders.
+State is stored in a SQLite-backed Durable Object.
+
+Follow [`deploy/cloudflare-workers.md`](deploy/cloudflare-workers.md) to authenticate
+Wrangler, deploy to a `workers.dev` URL, store the token as an encrypted secret, and
+verify the remote endpoint with the existing Python client.
 
 ## Maintenance tools
 

@@ -1,5 +1,8 @@
 .env
 .venv/
+node_modules/
+.wrangler/
+.dev.vars
 __pycache__/
 *.py[cod]
 .pytest_cache/
