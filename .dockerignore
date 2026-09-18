@@ -1,0 +1,11 @@
+.git
+.github
+.env
+.venv
+__pycache__
+*.pyc
+demo_workspace
+docs
+logs
+tests
+data/maintenance.local.json
