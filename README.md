@@ -204,6 +204,8 @@ capture.
 
 - [`docs/Reporte_Proyecto_1.pdf`](docs/Reporte_Proyecto_1.pdf): final technical report
   covering the server specification, Wireshark analysis, and conclusions.
+- [`docs/Reporte_Proyecto_1.docx`](docs/Reporte_Proyecto_1.docx): editable version of
+  the final report, using the same content and layout as the PDF.
 - [`docs/Reporte_Entrega_1.pdf`](docs/Reporte_Entrega_1.pdf): original first-delivery
   report retained for history.
 - [`ENTREGA_1.md`](ENTREGA_1.md): detailed notes for the first delivery.
