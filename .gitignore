@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 logs/*.jsonl
-demo_workspace/.git/
+demo_workspace/
+tmp/
 data/maintenance.local.json
 

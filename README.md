@@ -1,139 +1,218 @@
-# Proyecto 1 de Redes
+# CC3067 Project 1 - Manual MCP Chatbot
 
-Este es el avance de la primera entrega del proyecto. Hice un chatbot que se
-usa desde la consola y que puede comunicarse con varios servidores MCP.
+This project is a console chatbot that connects an Anthropic language model to local
+and remote Model Context Protocol (MCP) servers. The MCP lifecycle and JSON-RPC 2.0
+messages are implemented manually with the Python standard library; the project does
+not use FastMCP or an MCP SDK.
 
-Por ahora el proyecto trabaja solamente con servidores locales. Uno de ellos lo
-hice para llevar información de mantenimiento de máquinas. Los otros dos sirven
-para hacer pruebas con archivos y con Git.
+The custom server models an industrial maintenance system for a beverage plant. It can
+inspect machines, spare parts, and work orders. Actions that change data require user
+confirmation in the chatbot.
 
-## Qué hace
+## Features
 
-- Permite conversar con Claude desde la terminal.
-- Mantiene el contexto de la conversación mientras el programa está abierto.
-- Consulta máquinas, repuestos y órdenes de mantenimiento.
-- Pide confirmación antes de guardar o modificar datos.
-- Guarda un registro de la comunicación con los servidores.
-- Incluye pruebas para revisar que las funciones principales trabajen bien.
+- Anthropic Messages API integration and in-session conversation context.
+- Manual MCP clients for local `stdio` and remote Streamable HTTP transports.
+- Official Filesystem and Git MCP servers for local demonstrations.
+- A custom maintenance server with six tools.
+- JSON Lines logs for MCP requests, notifications, responses, and diagnostics.
+- Bearer authentication, Origin validation, sessions, and protocol-version checks for
+  the remote server.
+- Docker and Google Cloud Run deployment files.
+- Automated tests that do not consume Anthropic API credits.
+- A reproducible Wireshark procedure for application and network-layer analysis.
 
-La comunicación con MCP se hizo directamente con mensajes JSON-RPC, sin usar un
-SDK que hiciera esa parte automáticamente.
+## Architecture
 
-## Antes de ejecutarlo
+```text
+                         Anthropic Messages API
+                                  |
+                         Console chatbot host
+                         /                  \
+              manual stdio client      manual HTTP client
+                  /      |      \                |
+       maintenance  filesystem  git    maintenance server
+          local       official official     remote /mcp
+```
 
-Se necesita tener instalado lo siguiente:
+The local and remote maintenance entry points share the same `MaintenanceService` and
+JSON-RPC `MCPServer` implementation. Only their transport layer differs.
 
-- Python 3.11 o una versión más reciente.
+## Requirements
+
+- Python 3.11 or newer.
 - Git.
-- Node.js 22 o superior.
-- `npx`, `uv` y `uvx`.
-- Una clave de la API de Anthropic.
+- Node.js 22 or newer and `npx` for the official Filesystem server.
+- `uvx` for the official Git server.
+- An Anthropic API key for the interactive chatbot.
+- Docker only when building the remote container locally.
+- Wireshark with Npcap loopback support for the packet-analysis evidence.
 
-Se puede revisar desde PowerShell con estos comandos:
+This repository intentionally has no Python package dependencies at runtime.
 
-```powershell
-python --version
-git --version
-node --version
-npx --version
-uvx --version
-```
+## Initial setup
 
-Si hace falta `uvx`, se puede instalar así:
-
-```powershell
-python -m pip install uv
-```
-
-## Configuración
-
-Hay que crear una copia del archivo de ejemplo:
+Create a local environment file and add your Anthropic key:
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
-Después se coloca la clave de Anthropic dentro de `.env`:
-
 ```env
-ANTHROPIC_API_KEY=colocar_la_clave_aqui
+ANTHROPIC_API_KEY=your_key_here
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ```
 
-El archivo `.env` no se debe subir a GitHub porque contiene la clave personal.
-Por eso ya está agregado al `.gitignore`.
+Never commit `.env`; it is already ignored by Git.
 
-## Cómo correrlo
-
-Desde la carpeta del proyecto:
+## Run the chatbot with local MCP servers
 
 ```powershell
 python -m src.chatbot
 ```
 
-También se puede iniciar con:
+or:
 
 ```powershell
-.\run.ps1
+./run.ps1
 ```
 
-La primera vez puede tardar un poco mientras se descargan los servidores que
-usan `npx` y `uvx`.
+The default configuration starts:
 
-Estos son algunos comandos que se pueden escribir dentro del chatbot:
+- `maintenance`: this project's custom stdio server.
+- `filesystem`: the official Filesystem server restricted to `demo_workspace/`.
+- `git`: the official Git server restricted to the same demonstration repository.
 
-- `/servers`: muestra los servidores conectados.
-- `/tools`: muestra las herramientas disponibles.
-- `/logs 20`: enseña los últimos 20 registros.
-- `/clear`: limpia la conversación.
-- `/exit`: cierra el programa.
+Available chatbot commands:
 
-## Pruebas
+- `/servers`: show connected and unavailable MCP servers.
+- `/tools`: show tools exposed to the model.
+- `/logs 20`: show the latest MCP log entries.
+- `/clear`: clear conversation context.
+- `/exit`: close connections and exit.
 
-Para correr las pruebas del proyecto:
+## Run the Streamable HTTP server locally
+
+Terminal 1:
+
+```powershell
+./run_http.ps1
+```
+
+The script uses `http://127.0.0.1:8000/mcp`, an ignored local data file, and the
+disposable token `local-demo-token`.
+
+Terminal 2:
+
+```powershell
+$env:MCP_REMOTE_URL = "http://127.0.0.1:8000/mcp"
+$env:MCP_AUTH_TOKEN = "local-demo-token"
+python -m scripts.verify_remote
+```
+
+Expected output:
+
+```text
+PASS initialize: MCP 2025-11-25
+PASS tools/list: 6 tools
+PASS tools/call: 1 warning machine(s)
+```
+
+To connect the chatbot to this remote transport instead of the local servers:
+
+```powershell
+python -m src.chatbot --config config/servers_remote.json
+```
+
+## Remote MCP endpoint
+
+The server implements the JSON response form of MCP Streamable HTTP:
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health` | Deployment health check |
+| `POST /mcp` | Send one JSON-RPC request or notification |
+| `GET /mcp` | Returns `405`; a standalone SSE stream is not needed |
+| `DELETE /mcp` | Terminate the current MCP session |
+
+Initialization returns `MCP-Session-Id`. Later requests must include that value and
+`MCP-Protocol-Version: 2025-11-25`. The server accepts a native client without an
+`Origin` header, but a browser Origin must appear in `MCP_ALLOWED_ORIGINS`.
+
+For any non-local deployment, set a long random `MCP_AUTH_TOKEN`. The client sends it
+as `Authorization: Bearer <token>`.
+
+## Deploy to Google Cloud Run
+
+The root `Dockerfile` runs the HTTP service as a non-root user and listens on Cloud
+Run's `PORT`. Follow [`deploy/cloud-run.md`](deploy/cloud-run.md) to deploy from Cloud
+Shell, configure the token, retrieve the URL, and verify the live endpoint.
+
+The demonstration stores work orders in the container's ephemeral filesystem. A
+production version should use a transactional database before enabling multiple
+instances.
+
+## Maintenance tools
+
+| Tool | Purpose | Writes data |
+| --- | --- | --- |
+| `list_machines` | List all machines or filter by status | No |
+| `get_machine_status` | Read one machine record | No |
+| `list_work_orders` | List and filter maintenance orders | No |
+| `check_spare_part` | Search inventory and calculate reorder status | No |
+| `create_work_order` | Create a maintenance order | Yes |
+| `close_work_order` | Close an open order with a resolution | Yes |
+
+Example prompts:
+
+```text
+Which machines have a warning?
+Is a sealing resistance available for SELL-01?
+Create a high-priority order to inspect the resistance on SELL-01.
+```
+
+## Tests and verification
+
+Run the complete standard-library test suite:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Estas pruebas no utilizan la API de Anthropic, por lo que no consumen créditos.
-
-También se puede revisar si los servidores responden correctamente:
+Verify every server in a configuration without using the LLM API:
 
 ```powershell
 python -m scripts.verify_servers
+python -m scripts.verify_remote
 ```
 
-Al terminar deberían aparecer los servidores `maintenance`, `filesystem` y
-`git`.
+The local official-server check requires both `npx` and `uvx`. The remote verifier only
+requires Python and a running endpoint.
 
-## Ejemplos
+## Wireshark analysis
 
-Algunas consultas para probar el servidor de mantenimiento son:
+[`docs/WIRESHARK_ANALYSIS.md`](docs/WIRESHARK_ANALYSIS.md) provides the exact capture
+setup, display filters, deterministic message sequence, JSON-RPC classification, and
+analysis of the link, network, transport, and application layers.
 
-```text
-¿Qué máquinas tienen una advertencia?
-¿Hay repuesto de resistencia para la máquina SELL-01?
-Crea una orden de prioridad alta para revisar la resistencia de SELL-01.
-```
+Use a local loopback capture to inspect unencrypted JSON-RPC and a separate Cloud Run
+capture to demonstrate DNS, TCP, and TLS. Never publish a production token in a packet
+capture.
 
-La última consulta pide confirmación porque crea una nueva orden.
+## Reports
 
-También se puede probar el contexto de la conversación:
+- [`docs/Reporte_Proyecto_1.pdf`](docs/Reporte_Proyecto_1.pdf): final technical report
+  covering the server specification, Wireshark analysis, and conclusions.
+- [`docs/Reporte_Entrega_1.pdf`](docs/Reporte_Entrega_1.pdf): original first-delivery
+  report retained for history.
+- [`ENTREGA_1.md`](ENTREGA_1.md): detailed notes for the first delivery.
 
-```text
-¿Quién fue Alan Turing?
-¿En qué fecha nació?
-```
+## Repository safety
 
-## Primera entrega
-
-En esta parte se trabajó con la conexión local. El servidor remoto y el análisis
-en Wireshark se harán en la segunda entrega.
-
-El reporte se encuentra en
-[`docs/Reporte_Entrega_1.pdf`](docs/Reporte_Entrega_1.pdf).
-
-El archivo [`ENTREGA_1.md`](ENTREGA_1.md) contiene la explicación más detallada
-de las pruebas y de los mensajes usados para comunicarse con MCP.
+- `.env`, local data, MCP logs, virtual environments, and the demo Git repository are
+  ignored.
+- Filesystem and Git demonstrations are restricted to `demo_workspace/`.
+- The host asks for confirmation before write-oriented tools.
+- Remote sessions use a cryptographically random identifier and can be terminated with
+  `DELETE /mcp`.
